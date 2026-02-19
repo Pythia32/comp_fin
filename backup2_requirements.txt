@@ -28,11 +28,9 @@ requests==2.32.4
 requests-futures==1.0.2
 scikit-learn==1.6.1
 scipy==1.16.3
-setuptools==82.0.0
 six==1.17.0
 skfolio==0.15.5
 soupsieve==2.8.3
-tenacity==9.1.4
 threadpoolctl==3.6.0
 tqdm==4.67.3
 typing_extensions==4.15.0

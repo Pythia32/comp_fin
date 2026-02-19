@@ -13,7 +13,8 @@ from utils import fetch_spx_close, fetch_vix_close
 
 
 ## Data Loading
-data_SPX = pd.read_csv("option20230201_20230228.csv") # Load SPX option quote data
+data_path = "data/" + "option20230201_20230228.csv"
+data_SPX = pd.read_csv(data_path) # Load SPX option quote data
 data_SPX = data_SPX[["date","exdate","symbol","strike_price","best_bid","best_offer","impl_volatility","delta","cp_flag"]] # Discard irrelevant features
 print("Raw data observation count: ", data_SPX.shape[0]) # Reporting..
 
