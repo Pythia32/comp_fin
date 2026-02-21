@@ -139,7 +139,7 @@ Augmented_SPX_call_delta_series = SPX_call_delta_series_no_nan.copy()
 Augmented_SPX_call_delta_series.loc["SPX Delta"] = SPX_delta_series
 
 
-## Reporting (3)
+## Reporting
 # Merge coverage
 print("\nSPX close/delta merge coverage: 1.0")
 
@@ -181,9 +181,7 @@ standardized_column_names = list(
 treasury.columns = standardized_column_names # Rename columns to match standardized format: fraction/number of years
 treasury.columns.name = "Tenor (years)"
 
-print(treasury) ######
-treasury /= 100 # Raw par yield curve rates are given as percentages, we convert to decimal
-# treasury.iloc[:,1:] /= 100 # (Old)ERROR: the former "Date" column had already been set as index for treasury, hence excluding the first column was unnecessary (and in fact counterproductive!)
+treasury.iloc[:,1:] /= 100 # Raw par yield curve rates are given as percentages, we convert to decimal
 
 ## Reindex SPX call (delta) dataframes by their contract characterization: (K,T) where K is the strike and T the expiry date
 df = SPX_calls_no_nan[SPX_calls_no_nan["symbol"].isin(contracts)][["symbol","strike","exdate"]]
@@ -206,168 +204,57 @@ Augmented_SPX_call_midquote_series.index.name = "(Contract (\"symbol\"), K, T)"
 Augmented_SPX_call_delta_series.rename(index=new_indexes, inplace=True)
 Augmented_SPX_call_delta_series.index.name = "(Contract (\"symbol\"), K, T)"
 
-## Construct a new DataFrame containing the year-fraction maturity (tau) for each contract at every timestamp (date)
-expiry = Augmented_SPX_call_midquote_series.index[:-1]
-call_dates = Augmented_SPX_call_midquote_series.columns
+##########
+# Map elements x of the V_t / delta V_t DataFrames to (x, tau), where tau is the year-fraction maturity
+get_tau_tuple = lambda df, i, j: (df.iat[i,j], (df.index[i][-1] - df.columns[j]).days / 365)
+# get_tau_tuple = lambda df, i, j: (df.iat[i,j], round((df.index[i][-1] - df.columns[j]).days / 365, 5))
 
-tau_matrix = [
-    [round((expiry[i][-1] - call_dates[j]).days / 365, 5) # Can change this later depending on the desired precision of tau
-     for j in range(Augmented_SPX_call_midquote_series.shape[1])]
-    for i in range(Augmented_SPX_call_midquote_series.shape[0] - 1)
-]
-SPX_call_tau_series = pd.DataFrame(
-    tau_matrix,
-    index=Augmented_SPX_call_midquote_series.index[:-1],
+rows = (
+    [
+        [get_tau_tuple(Augmented_SPX_call_midquote_series, i, j) 
+         for j in range(Augmented_SPX_call_midquote_series.shape[1])]
+        for i in range(Augmented_SPX_call_midquote_series.shape[0] - 1)
+    ] + [Augmented_SPX_call_midquote_series.iloc[-1, :].tolist()]
+)
+Aug_SPX_call_mq_and_tau_series = pd.DataFrame(
+    rows,
+    index=Augmented_SPX_call_midquote_series.index,
     columns=Augmented_SPX_call_midquote_series.columns
 ) 
 
+rows = (
+    [
+        [get_tau_tuple(Augmented_SPX_call_delta_series, i, j) 
+         for j in range(Augmented_SPX_call_delta_series.shape[1])]
+        for i in range(Augmented_SPX_call_delta_series.shape[0] - 1)
+    ] + [Augmented_SPX_call_delta_series.iloc[-1,:].tolist()]
+)
+Aug_SPX_call_d_and_tau_series = pd.DataFrame(
+    rows,
+    index=Augmented_SPX_call_delta_series.index,
+    columns=Augmented_SPX_call_delta_series.columns
+) 
+##########
 
-## (a) Treasury date alignment and missing-day handling
+### format:
+# df_new = pd.DataFrame(
+#     [
+#         [(df.loc[i, j], f(i, j)) for j in df.columns]
+#         for i in df.index
+#     ],
+#     index=df.index,
+#     columns=df.columns
+# ) 
+###
+print(Aug_SPX_call_mq_and_tau_series)
+print(Aug_SPX_call_d_and_tau_series)
+
+## Treasury date alignment and missing-day handling
 treasury_dates = list(treasury.index)
 assert treasury_dates == dates, "Dates captured in treasury DataFrame do not match those in the augmented V_t / delta V_t DataFrames" # The dates can be expected to be equal by construction of the treasury DataFrame
 
-
-##################################################################################### Check code thoroughly from this point!!
-## (b) Nelson-Siegel-Svensson (NSS) curve
-def nss_basis(tau, tau1, tau2): # Note: during the fitting process, each observation will have tau corresponding to some tenor in treasury.columns
-    tau = np.maximum(tau, 1 / 365) # avoid tau=0
-    # tau = np.maximum(tau, 1e-6)
-
-    g1 = (1 - np.exp(-tau/tau1)) / (tau/tau1)
-    g2 = g1 - np.exp(-tau/tau1)
-    g3 = (1 - np.exp(-tau/tau2)) / (tau/tau2) - np.exp(-tau/tau2)
-
-    return np.column_stack([np.ones_like(tau), g1, g2, g3])
-
-
-## (c) Daily calibration via grid search + conditional OLS
-def parse_tenor(x):
-    if "/" in x:
-        a, b = x.split("/")
-        return float(a)/float(b)
-    return float(x)
-
-tenors = np.array([parse_tenor(c) for c in treasury.columns])
-
-
-def conditional_ols(y, tenors, tau1, tau2):
-    X = nss_basis(tenors, tau1, tau2)
-    beta, *_ = np.linalg.lstsq(X, y) # Is a np.ndarray
-    residuals = y - X @ beta
-    sse = residuals @ residuals
-    return beta, sse
-
-# (!) Might be able to improve the grids below: (!)
-# tau1_grid = np.geomspace(1e-3, 1e-1, 1000) # This one is computationally too heavy to be ran while still editing the code, but may give better parameter estimations in the end (unless it overfits?) 
-# tau2_grid = np.geomspace(1e-1, 1, 500)
-# 
-# tau1_grid = np.geomspace(1e-3, 1e-1, 200) # np.geomspace generates a grid with numbers spaced evenly on a logscale, which is convenient/ fitting in this case
-# tau2_grid = np.geomspace(1e-1, 1, 100)
-# 
-tau1_grid = np.geomspace(0.05, 5, 100)
-tau2_grid = np.geomspace(0.25, 25, 100)
-# 
-# tau1_grid = np.geomspace(1e-4, 10, 100)
-# tau2_grid = np.geomspace(1e-4, 10, 100)
-# 
-# tau1_grid = np.linspace(0.1, 5, 30) # These grids for tau1 and tau2 were arbitrarily picked --->! Should improve this/ provide clarification!
-# tau2_grid = np.linspace(0.1, 10, 40)
-# ----> Note(!): We could consider using a collection of grids, i.e. different tau1/tau2_grid for every date ----> SideNote(!): This may lead to slight overfitting?/ violation of market assumptions?
-
-def fit_nss_grid(y, tenors, tau1_grid, tau2_grid):
-
-    best_sse = np.inf # np.inf is a representation of infinity in Python, hence a convenient starting value
-    best_params = None
-
-    for tau1 in tau1_grid:
-        for tau2 in tau2_grid:
-            if tau2 < tau1: # Only consider pairs (tau1, tau2) satisfying tau2 >= tau1, to ensure numerical stability
-                continue
-
-            beta, sse = conditional_ols(y, tenors, tau1, tau2)
-
-            if sse < best_sse:
-                best_sse = sse
-                best_params = (beta, tau1, tau2)
-
-    beta, tau1, tau2 = best_params
-    return beta, tau1, tau2
-
-
-nss_results = {} # For each date (key); contains the estimated parameters of the NSS curve (value)
-
-for date in treasury.index:
-    y = treasury.loc[date].values # .values method for pd.Series returns an ndarray object
-    beta, tau1, tau2 = fit_nss_grid(y, tenors, tau1_grid, tau2_grid)
-
-    nss_results[date] = np.concatenate([beta, [tau1, tau2]])
-
-nss_df = pd.DataFrame(
-    nss_results,
-    index=["beta0","beta1","beta2","beta3","tau1","tau2"]
-).T
-
-
-## (d) Evaluating the curve at option maturities    ##### CHECK this one EVEN MORE CAREFULLY (!!!) (I was tired..)
-def fitted_yield(tau, params):
-    beta = params[:4]
-    assert len(beta) == 4, "beta should have length 4"
-    tau1 = params[4]
-    tau2 = params[5]
-
-    X = nss_basis(tau, tau1, tau2)
-    # X = nss_basis(np.array([tau]), tau1, tau2)
-    return X @ beta
-    # return float(X @ beta)
-
-# def fitted_yield(tau, beta, tau1, tau2):
-#     X = nss_basis(np.array([tau]), tau1, tau2)
-#     return float(X @ beta)
-
-# def evaluate_curve(tau_matrix, beta, tau1, tau2):
-#     tau_flat = tau_matrix.flatten() # To make it compatible (1d ndarray) with function nss_basis()
-#     X = nss_basis(tau_flat, tau1, tau2)
-#     fitted = X @ beta
-#     return fitted.reshape(tau_matrix.shape) # "Deflatten" the result to match the original matrix shape
-
-tau_matrix = np.array(tau_matrix, dtype=float) ### NOT necessarily REQUIRED, can be removed later
-
-yields = {}
-for date in SPX_call_tau_series.columns:
-    tau = SPX_call_tau_series[date].values
-    params = nss_df.loc[date].values
-    row = fitted_yield(tau, params)
-    yields[date] = row
-
-SPX_call_fitted_yields = pd.DataFrame(
-    yields,
-    index = SPX_call_tau_series.index,
-    columns = SPX_call_tau_series.columns
-)
-
-### Testing
-print(treasury)
-print(SPX_call_tau_series)
-print(tau_matrix)
-print(nss_df)
-print(SPX_call_fitted_yields)
-###
-
-
-## (e) Converting Treasury yield quotes to a continuously-compounded zero rate
-def par_to_cc(y):
-    return 2 * np.log(1 + y/2)
-
-cc_rates = SPX_call_fitted_yields.map(par_to_cc)
-
-## The associated discount factors
-discount_factors = np.exp(-cc_rates * tau_matrix) # Element-wise multiplication
-
-
-## Reporting (4)
-# ...
-
-
+# print(dates)
+# print(treasury_dates)
 
 ### Testing:
 # print("\n", Augmented_SPX_call_midquote_series)
@@ -384,9 +271,3 @@ discount_factors = np.exp(-cc_rates * tau_matrix) # Element-wise multiplication
 # print(type(Augmented_SPX_call_midquote_series.columns[0]))
 # print((Augmented_SPX_call_midquote_series.index[0][-1] - Augmented_SPX_call_midquote_series.columns[0]).days /365)
 # print(Augmented_SPX_call_delta_series.iloc[-1,:].tolist())
-
-# expiry = Augmented_SPX_call_midquote_series.index[:-1].get_level_values(-1)
-# print(expiry)
-
-# print(SPX_call_tau_series)
-
