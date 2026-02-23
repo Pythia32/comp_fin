@@ -149,10 +149,10 @@ print("\nSPX close/delta merge coverage: 1.0")
 
 # Plots of S_t and delta S_t over time
 SPX_close_series.plot(title="SPX Close Price")
-# plt.show()  # Can be improved!
+# plt.show()  # Can be improved! + UNCOMMENT THIS in the hand-in doc.
 
 SPX_delta_series.plot(title="Daily SPX Change")
-# plt.show()  # Can be improved!
+# plt.show()  # Can be improved! + UNCOMMENT THIS in the hand-in doc.
 
 
 
@@ -181,7 +181,6 @@ standardized_column_names = list(
 treasury.columns = standardized_column_names # Rename columns to match standardized format: fraction/number of years
 treasury.columns.name = "Tenor (years)"
 
-print(treasury) ######
 treasury /= 100 # Raw par yield curve rates are given as percentages, we convert to decimal
 # treasury.iloc[:,1:] /= 100 # (Old)ERROR: the former "Date" column had already been set as index for treasury, hence excluding the first column was unnecessary (and in fact counterproductive!)
 
@@ -346,11 +345,11 @@ SPX_call_fitted_yields = pd.DataFrame(
 )
 
 ### Testing
-print(treasury)
-print(SPX_call_tau_series)
-print(tau_matrix)
-print(nss_df)
-print(SPX_call_fitted_yields)
+# print(treasury)
+# print(SPX_call_tau_series)
+# print(tau_matrix)
+# print(nss_df)
+# print(SPX_call_fitted_yields)
 ###
 
 
@@ -361,32 +360,86 @@ def par_to_cc(y):
 cc_rates = SPX_call_fitted_yields.map(par_to_cc)
 
 ## The associated discount factors
-discount_factors = np.exp(-cc_rates * tau_matrix) # Element-wise multiplication
+disc_factors = np.exp(-cc_rates * tau_matrix) # Element-wise multiplication
 
 
 ## Reporting (4)
-# ...
+# (4.1) Summary of {r_t(\tau)} values
+print("\n", cc_rates.describe()) # Statistics per date
+print(pd.Series(cc_rates.to_numpy().flatten()).describe()) # Statistics over all values
+
+# (4.2) Plot of \tau\to r_t(\tau), for a representative date
+repr_date = "2023-02-14" # This date is more in the "middle" w.r.t. the captured dates, perhaps a more suitable choice
+# repr_date = "2023-02-28"
+repr_date = pd.to_datetime(repr_date)
+
+tau_series_no_dups = SPX_call_tau_series.drop_duplicates(subset=[repr_date])
+cc_rates_no_dups = cc_rates.loc[tau_series_no_dups.index]
+
+x = tau_series_no_dups[repr_date].values
+y = cc_rates_no_dups[repr_date].values
+x_sorted = np.sort(x)
+sorted_idx = np.argsort(x)
+y_sorted = y[sorted_idx]
+plt.figure(figsize=(8, 5))
+plt.scatter(x, y, label=r"Observed $r_t(\tau)$", zorder=3) # zorder=3 makes the dots from the scatterplots go "below" the line from the plot
+plt.plot(x_sorted, y_sorted, label="Approximate NSS-fit")
+plt.xlabel(r"$\tau$")
+plt.ylabel(r"$r_t(\tau)$", rotation="horizontal")
+plt.title(label=r"Plot of observed $r_t(\tau)$ and the approximate NSS-fit " + f"on t={repr_date.date()}:")
+plt.legend()
+plt.grid(True)
+# plt.show() # UNCOMMENT THIS in the hand-in doc.
+
+# (4.3) Verification that every option row has a finite r_t(\tau) and discount factor P_t(\tau)
+disc_factors_no_dups = disc_factors.drop_duplicates()
+
+def val_checker(row: pd.Series): # Checks whether a DataFrame row (pd.Series) contains atleast one element that is both not NaN and not infinite (np.inf)
+    flag = 0
+    if row.isna().all() == 1 or np.isinf(row.values).all() == 1:
+        flag = 1
+    return flag
+
+cc_val_check = cc_rates_no_dups.apply(val_checker, axis=0)
+if any(cc_val_check):
+    print("\nThere exists an option row having no finite r_t(\\tau)")
+else:
+    print("\nAll option rows have atleast one finite r_t(\\tau)")
+
+disc_fac_val_check = disc_factors_no_dups.apply(val_checker, axis=0)
+if any(disc_fac_val_check):
+    print("There exists an option row having no finite P_t(\\tau)")
+else:
+    print("All option rows have atleast one finite P_t(\\tau)")
 
 
 
-### Testing:
-# print("\n", Augmented_SPX_call_midquote_series)
-# print(Augmented_SPX_call_delta_series)
-# print(treasury.iloc[:,1:])
-# print(treasury)
-# print(treasury.columns)
-# print(treasury.shape)
-# print(len(dates))
+#### Step 5:
+## (a) Baseline delta
+print(SPX_calls_no_nan)
+# print(Augmented_SPX_call_midquote_series)
 
-# print(Augmented_SPX_call_midquote_series.index) 
-# print(Augmented_SPX_call_midquote_series.columns)
-# print(type(Augmented_SPX_call_midquote_series.index[0][-1]))
-# print(type(Augmented_SPX_call_midquote_series.columns[0]))
-# print((Augmented_SPX_call_midquote_series.index[0][-1] - Augmented_SPX_call_midquote_series.columns[0]).days /365)
-# print(Augmented_SPX_call_delta_series.iloc[-1,:].tolist())
+df = Augmented_SPX_call_midquote_series.iloc[:-1, :].copy()
+df.columns.name = None
+idx, df["strike"], df["expiry"] = zip(*df.index)
 
-# expiry = Augmented_SPX_call_midquote_series.index[:-1].get_level_values(-1)
-# print(expiry)
+df.index = idx
+df.index.name = "symbol"
+print(df)
 
-# print(SPX_call_tau_series)
+SPX_mq_delta_hedge = df.merge(SPX_calls_no_nan[["symbol", "delta"]], how="left", left_index=True, right_on="symbol")
+# Note(!!): There seem to be multiple delta entries per Contract, hence may need to create a tuple (mq, delta_hedge) for each date
+SPX_mq_delta_hedge.set_index("symbol", inplace=True)
+print(SPX_mq_delta_hedge)
 
+
+## (b) Baseline residuals and SSE
+
+
+## (c) Standardized filters (mandatory)
+
+
+## (d) Standardized bucketing (mandatory)
+
+
+## (f) Hedging residuals and SSEs
