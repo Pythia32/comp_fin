@@ -444,23 +444,23 @@ spx_close_delta_ts = Augmented_SPX_call_delta_series.iloc[-1, :].copy()
 spx_close_delta_ts.index.name = "date"
 spx_close_delta_ts.rename("close", inplace=True)
 
-# Construct new DataFrame for hedge deltas
-spx_call_hedge_delta_ts = (  # DataFrame of hedge delta time series', where each row corresponds to a unique contract ("symbol"), and each column corresponds to a unique date ("date")
+# Construct new DataFrame for hedge deltas (Old name: spx_call_hedge_delta_ts)
+spx_call_baseline_hedge_delta = (  # DataFrame of hedge delta time series', where each row corresponds to a unique contract ("symbol"), and each column corresponds to a unique date ("date")
     SPX_calls_no_nan
     .pivot(index="symbol", columns="date", values="delta")
     # .reindex(index=contracts)
 )
-spx_call_hedge_delta_ts.columns.name = "date"
-spx_call_hedge_delta_ts.index.name = "symbol"
+spx_call_baseline_hedge_delta.columns.name = "date"
+spx_call_baseline_hedge_delta.index.name = "symbol"
 
-spx_call_hedge_delta_ts.dropna(inplace=True) # Remove observations (contracts) with incomplete time series (having NaN entries)
+spx_call_baseline_hedge_delta.dropna(inplace=True) # Remove observations (contracts) with incomplete time series (having NaN entries)
 # spx_call_hedge_delta_ts_no_nan = spx_call_hedge_delta_ts.dropna() # Remove observations (contracts) with incomplete time series (having NaN entries)
 
-assert (spx_call_hedge_delta_ts.index == spx_call_delta_ts.index).all(), "Indexes (contracts) in spx_call_hedge_delta_ts do not match those in the SPX call dataframes constructed prior"
+assert (spx_call_baseline_hedge_delta.index == spx_call_delta_ts.index).all(), "Indexes (contracts) in spx_call_baseline_hedge_delta do not match those in the SPX call dataframes constructed prior"
 
 
 ## (b) Baseline residuals and SSE
-spx_call_baseline_residuals = spx_call_delta_ts.sub(spx_call_hedge_delta_ts.mul(spx_close_delta_ts, axis=1)) 
+spx_call_baseline_residuals = spx_call_delta_ts.sub(spx_call_baseline_hedge_delta.mul(spx_close_delta_ts, axis=1)) 
 spx_call_baseline_residuals.drop(spx_call_baseline_residuals.columns[-1], axis=1, inplace=True) # Drop last column, which contains only NaN values since the spx call midquote deltas are undefined for t = 2023-02-28 --> Note: is the only column containing NaN's (all 4975 elements), all other columns have 0 NaN values.
 print(spx_call_baseline_residuals)
 
@@ -468,7 +468,7 @@ print(spx_call_baseline_residuals)
 ## (c) Standardized filters (mandatory)
 ### Attempt 2
 # First filtering step: discard observations with Delta^{BS}_t <= 0.05 at any timestamp t
-first_filter = spx_call_hedge_delta_ts.mask(spx_call_hedge_delta_ts <= 0.05)
+first_filter = spx_call_baseline_hedge_delta.mask(spx_call_baseline_hedge_delta <= 0.05)
 first_filter.dropna(axis=0, inplace=True) ### ??
 
 # Second filtering step: discard observations with Delta^{BS}_t >= 0.05 at any timestamp t
@@ -482,38 +482,83 @@ spx_call_days_to_exp = (
     df
     .pivot(index="symbol", columns="date", values="days_to_exp")
 )
-spx_call_days_to_exp = spx_call_days_to_exp.loc[spx_call_hedge_delta_ts.index]
+spx_call_days_to_exp = spx_call_days_to_exp.loc[spx_call_baseline_hedge_delta.index]
 
 # Third filtering step: discard observations with D_t <= 14 at any timestamp t
 third_filter = second_filter.mask(spx_call_days_to_exp.loc[second_filter.index] <= pd.to_timedelta(14, unit= "D"))
 third_filter.dropna(axis=0, inplace=True) ### ??
 
 spx_call_baseline_residuals_filtered = spx_call_baseline_residuals.loc[third_filter.index]
-print(spx_call_baseline_residuals_filtered)
+spx_call_baseline_sse = spx_call_baseline_residuals_filtered.pow(2).sum(axis=1)
 
 
 ## (d) Standardized bucketing (mandatory)
+# Construct buckets (bins)
+hd_bins = np.linspace(start=0.05, stop=0.95, num=10) # Hedge delta bins: 10 boundaries => 9 bins
+print(hd_bins)
 
+min = 14
+max = spx_call_days_to_exp.max().max().days
+
+tte_bins = np.linspace(min, max, num=8, dtype=int) # Time-to-expiry bins: 8 boundaries => 7 bins
+tte_bins = pd.to_timedelta(tte_bins, unit="D")
+
+# tte_bins = np.linspace(start=min, stop=max, num=8) # Time-to-expiry bins: 8 boundaries => 7 bins
+# to_timedelta = np.vectorize(lambda x: pd.to_timedelta(int(x), unit= "D")) # Note: Python int() function always rounds floats towards 0, i.e. rounds down positive floats
+# tte_bins = to_timedelta(tte_bins)
+
+print(tte_bins)
+
+# min = pd.to_timedelta(14, unit= "D") # --> Note: for each pair: value, subsequent value; formulate bin as: value < x <= subsequent value
+# max = spx_call_days_to_exp.max().max()
+# # print(min, max)
+# tte_bins = pd.date_range(start=min, end=max, periods=8)  # Time-to-expiry bins: 8 boundaries => 7 bins
+# print(tte_bins)
+
+# Fill buckets
+# ...
 
 ## (f) Hedging residuals and SSEs
 
 
 ## Reporting (5)
-# (b/4.1) Summary statistics of epsilon_t(Delta^{BS})
+# (b/1) Summary statistics of epsilon_t(Delta^{BS})
 print("\n", spx_call_baseline_residuals.describe()) # Statistics per date
 print(pd.Series(spx_call_baseline_residuals.to_numpy().flatten()).describe()) # Statistics over all values
+### (!) ---> Q.: "Should we use the raw residual data: spx_call_baseline_residuals, or the filtered residual data: spx_call_baseline_residuals_filtered?"
+### ---> A.: "We should use the unfiltered residual data here; using filtered data only applies to the SSE data."
 
-# (c // b/4.2) Row count after each filter + Baseline SSE(Delta^{BS}) after standardized filters
-print("Row count after first filter " + r"$(\Delta_t^{\text{BS}})\leq 0.05$" + ": ", first_filter.shape[0])
+# (c) Remaining row count after each filter
+print("\nRow count after first filter " + r"$(\Delta_t^{\text{BS}})\leq 0.05$" + ": ", first_filter.shape[0])
 print("Row count after second filter " + r"$(\Delta_t^{\text{BS}})\geq 0.95$" + ": ", second_filter.shape[0])
 print("Row count after third filter " + r"$D_t\leq 14$" + ": ", third_filter.shape[0])
 
-# (b/4.3) Plot of baseline delta vs strike for chosen day and maturity slice
-# Again we use repr_date = "2023-02-14"
-repr_maturity = spx_call_info["expiry"].median()
-# print(repr_date)
-# print(repr_maturity)
-# print(spx_call_info)
-# ...
+# (b/2) Baseline SSE(Delta^{BS}) after standardized filters
+print(spx_call_baseline_sse)
 
-# (b/4.4) Study of the misspecification effect on the hedging performance on the implied-volatility parameter
+# (b/3) Plot of baseline (hedge) delta vs strike for chosen day and maturity (expiry) slice
+repr_date = pd.to_datetime("2023-02-14") # Again we use repr_date = "2023-02-14"
+repr_expiry = spx_call_info["expiry"].median()
+
+x = spx_call_info[spx_call_info["expiry"] == repr_expiry]["strike"]
+y = spx_call_baseline_hedge_delta.loc[x.index][repr_date]
+assert all(x.index == y.index), "Indices (\"symbol\") for x and y in the plot of baseline delta vs strike, do not match"
+x = x.values
+y = y.values
+
+x_sorted = np.sort(x)
+sorted_idx = np.argsort(x)
+y_sorted = y[sorted_idx]
+plt.figure(figsize=(8, 5))
+plt.scatter(x, y, label="Observed values", zorder=3) 
+plt.plot(x_sorted, y_sorted, label="Fitted values")
+plt.xlabel(r"strike $K$")
+plt.ylabel(r"$\Delta_t^{\text{BS}}$", rotation="horizontal")
+plt.title(label=r"Plot of $\Delta_t^{\text{BS}}$ vs strike $K$;  " + f"on t={repr_date.date()},  given expiry T={repr_expiry.date()}:")
+plt.legend()
+plt.grid(True)
+# plt.show() # UNCOMMENT THIS in the hand-in doc.
+# ---> Note: We should expect the (baseline) hedge delta to decrease as the strike K increases --> ensures delta hedge is a "good" substitute for moneyness = S_0/K
+
+# (b/4) Study of the misspecification effect on the hedging performance on the implied-volatility parameter
+# ... ToDo!!
