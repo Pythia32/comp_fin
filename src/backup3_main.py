@@ -456,16 +456,12 @@ spx_call_baseline_hedge_delta.index.name = "symbol"
 spx_call_baseline_hedge_delta.dropna(inplace=True) # Remove observations (contracts) with incomplete time series (having NaN entries)
 # spx_call_hedge_delta_ts_no_nan = spx_call_hedge_delta_ts.dropna() # Remove observations (contracts) with incomplete time series (having NaN entries)
 
-spx_call_baseline_hedge_delta.drop(spx_call_baseline_hedge_delta.columns[-1], axis=1, inplace=True) # Drop last column to ensure compatibility with "spx_call_delta_ts" and "spx_close_delta_ts" (!!)
-# ---> Note: "Must go after the dropna() operation, since otherwise the retained indices (contracts), do not match those in spx_call_delta_ts" (!)
-
 assert (spx_call_baseline_hedge_delta.index == spx_call_delta_ts.index).all(), "Indexes (contracts) in spx_call_baseline_hedge_delta do not match those in the SPX call dataframes constructed prior"
 
 
 ## (b) Baseline residuals and SSE
 spx_call_baseline_residuals = spx_call_delta_ts.sub(spx_call_baseline_hedge_delta.mul(spx_close_delta_ts, axis=1)) 
-# spx_call_baseline_residuals.drop(spx_call_baseline_residuals.columns[-1], axis=1, inplace=True) # Drop last column, which contains only NaN values since the spx call midquote deltas are undefined for t = 2023-02-28 --> Note: is the only column containing NaN's (all 4975 elements), all other columns have 0 NaN values.
-# ---> Note: "Operation NO LONGER REQUIRED; since the root problem (dim. incompatibility) that was causing the final column to be full of NaNs, has been identified and resolved." (!)
+spx_call_baseline_residuals.drop(spx_call_baseline_residuals.columns[-1], axis=1, inplace=True) # Drop last column, which contains only NaN values since the spx call midquote deltas are undefined for t = 2023-02-28 --> Note: is the only column containing NaN's (all 4975 elements), all other columns have 0 NaN values.
 print(spx_call_baseline_residuals)
 
 
@@ -486,11 +482,7 @@ spx_call_days_to_exp = (
     df
     .pivot(index="symbol", columns="date", values="days_to_exp")
 )
-
 spx_call_days_to_exp = spx_call_days_to_exp.loc[spx_call_baseline_hedge_delta.index]
-
-spx_call_days_to_exp.drop(spx_call_days_to_exp.columns[-1], axis=1, inplace=True) # Drop last column to ensure compatibility with "spx_call_baseline_hedge_delta" (and thus also "spx_call_delta_ts" and "spx_close_delta_ts") (!!)
-# ---> Note: "Place this operation after taking a subset of the indices (using .loc), for future safety purposes" (!)
 
 # Third filtering step: discard observations with D_t <= 14 at any timestamp t
 third_filter = second_filter.mask(spx_call_days_to_exp.loc[second_filter.index] <= pd.to_timedelta(14, unit= "D"))
@@ -501,194 +493,151 @@ spx_call_baseline_sse = spx_call_baseline_residuals_filtered.pow(2).sum(axis=1)
 
 
 ## (d) Standardized bucketing (mandatory)
-# Get hedge delta bins
-delta_bins = np.linspace(0.05, 0.95, num=10)  # 10 boundaries → 9 bins
+# Construct buckets (bins)
+hd_bins = np.linspace(start=0.05, stop=0.95, num=10) # Hedge delta bins: 10 boundaries => 9 bins
+# print(hd_bins) ###
 
-# Get time-to-expiry bins
-min_days = 14
-max_days = spx_call_days_to_exp.max().max().days
+min = 14
+max = spx_call_days_to_exp.max().max().days
 
-tte_bins = np.linspace(min_days, max_days, num=8, dtype=int) # Time-to-expiry bins: 8 boundaries => 7 bins
+tte_bins = np.linspace(min, max, num=8, dtype=int) # Time-to-expiry bins: 8 boundaries => 7 bins
 tte_bins = pd.to_timedelta(tte_bins, unit="D")
 
-# DataFrames / ndarrays to be used
-res_df = spx_call_baseline_residuals_filtered
-delta_df = spx_call_baseline_hedge_delta.loc[res_df.index]
-tte_df = spx_call_days_to_exp.loc[res_df.index]
+# tte_bins = np.linspace(start=min, stop=max, num=8) # Time-to-expiry bins: 8 boundaries => 7 bins
+# to_timedelta = np.vectorize(lambda x: pd.to_timedelta(int(x), unit= "D")) # Note: Python int() function always rounds floats towards 0, i.e. rounds down positive floats
+# tte_bins = to_timedelta(tte_bins)
 
-res_arr = res_df.to_numpy()
+# print(tte_bins) ###
 
-# Define bucket labeling
-delta_label = []
-it = iter(delta_bins)
-h1 = next(it)
-for _ in range(len(delta_bins)-1):
-    h2 = next(it)
-    x = f"{round(h1, 2)} < \u0394 <= {round(h2, 2)}"
-    delta_label.append(x)
-    h1 = h2 
+# min = pd.to_timedelta(14, unit= "D") # --> Note: for each pair: value, subsequent value; formulate bin as: value < x <= subsequent value
+# max = spx_call_days_to_exp.max().max()
+# # print(min, max)
+# tte_bins = pd.date_range(start=min, end=max, periods=8)  # Time-to-expiry bins: 8 boundaries => 7 bins
+# print(tte_bins)
 
-tte_label = []
-it = iter(tte_bins)
-d1 = next(it)
-for _ in range(len(tte_bins)-1):
-    d2 = next(it)
-    x = f"{d1.days} < D <= {d2.days}"
-    tte_label.append(x)
-    d1 = d2
+### Baseline(!) buckets
+### Attempt 2:
+base_buckets = []
 
-# Construct buckets
-buckets = {} 
-
-##########TESTTESTTEST
-# print(delta_df.shape)
-# print(tte_df.shape)
-# print("\n", spx_call_delta_ts.shape)
-# print(spx_call_baseline_hedge_delta.shape)
-# print(spx_close_delta_ts.shape)
-# print("\n", spx_call_baseline_residuals_filtered.shape)
-##########TESTTESTTEST
-
-for i in range(len(delta_bins)-1):
-    h1 = delta_bins[i]
-    h2 = delta_bins[i+1]
-    row = {}
-    row_label = delta_label[i]
+for i in range(len(hd_bins)-1):
+    h1 = hd_bins[i]
+    h2 = hd_bins[i+1]
+    row = []
 
     for j in range(len(tte_bins)-1):
         d1 = tte_bins[j]
         d2 = tte_bins[j+1]
 
+        delta = spx_call_baseline_hedge_delta.loc[spx_call_baseline_residuals_filtered.index]
+        tte = spx_call_days_to_exp.loc[spx_call_baseline_residuals_filtered.index]
+
         mask = (
-            (h1 < delta_df) & (delta_df <= h2) &
-            (d1 < tte_df) & (tte_df <= d2)
-        )
-        mask_arr = mask.to_numpy()
-
-        col_label = tte_label[j]
-        row[col_label] = mask_arr
-        
-    buckets[row_label] = row
-
-# Get global results (SSE/MSE) on the final filtered sample
-sse = res_df.pow(2).sum(axis=1)
-sse.rename("SSE", inplace=True)
-print(sse)
-
-mse = sse / res_df.shape[1]
-mse.rename("MSE", inplace=True)
-print(mse)
-
-# Get bucket results
-# (1) (To be used for heatmaps)
-bucket_sse = []
-
-for i in range(len(delta_bins)-1):
-    row = []
-    row_label = delta_label[i]
-
-    for j in range(len(tte_bins)-1):
-        col_label = tte_label[j]
-
-        mask_arr = buckets[row_label][col_label]
-        sse = ((mask_arr * res_arr) ** 2).sum()
-
-        row.append(sse)
-        
-    bucket_sse.append(row)
-
-bucket_sse = np.array(bucket_sse)
-
-# (2)
-bucket_sse_per_call = []
-
-for i in range(len(delta_bins)-1):
-    row = []
-    row_label = delta_label[i]
-
-    for j in range(len(tte_bins)-1):
-        col_label = tte_label[j]
-
-        mask_arr = buckets[row_label][col_label]
-        sse = ((mask_arr * res_arr) ** 2).sum(axis=1)
-        sse = pd.Series(
-            sse, 
-            index = res_df.index
+            (h1 < delta) & (delta <= h2) &
+            (d1 < tte) & (tte <= d2)
         )
 
-        row.append(sse)
-        
-    bucket_sse_per_call.append(row)
+        # print(mask) ###
+        # print(mask.sum())
+        # print(mask.values.sum())
 
-bucket_sse_per_call = pd.DataFrame(
-    bucket_sse_per_call,
-    index = delta_label,
-    columns = tte_label,
+        count = mask.values.sum()
+        row.append(count)
+
+    base_buckets.append(row)
+### Attempt 1:
+# base_buckets = []
+# for i in range(len(hd_bins)-1):
+#     h1 = hd_bins[i]
+#     h2 = hd_bins[i+1]
+#     row = []
+#     for j in range(len(tte_bins)-1):
+#         d1 = tte_bins[j]
+#         d2 = tte_bins[j+1]
+#         subset = spx_call_baseline_residuals_filtered.copy()
+#         subset.mask(~ (h1 < spx_call_baseline_hedge_delta.loc[subset.index] & spx_call_baseline_hedge_delta.loc[subset.index] <= h2), inplace=True) # Mask all entries not satisfying containment in the current Delta_t^{BS} bin
+#         subset.mask(~ (d1 < spx_call_days_to_exp.loc[subset.index] & spx_call_days_to_exp.loc[subset.index] <= d2), inplace=True) # Mask all entries not satisfying containment in the current D_t bin
+#         # subset.mask(not (h1 < spx_call_baseline_hedge_delta.loc[subset.index] and spx_call_baseline_hedge_delta.loc[subset.index] <= h2), inplace=True) # Mask all entries not satisfying containment in the current Delta_t^{BS} bin
+#         # subset.mask(not (d1 < spx_call_days_to_exp.loc[subset.index] and spx_call_days_to_exp.loc[subset.index] <= d2), inplace=True) # Mask all entries not satisfying containment in the current D_t bin
+#         count = subset.count().sum() # Counts the number of non-NaN elements per column, and then sums them up
+#         row.append(count)
+#     base_buckets.append(row)
+
+# Note: \u0394 is the unicode expression for the greek Delta
+idx = []
+it = iter(hd_bins)
+h1 = next(it)
+for _ in range(len(hd_bins)-1):
+    h2 = next(it)
+    x = f"{round(h1, 2)}<\u0394<={round(h2, 2)}"
+    # x = f"{h1} < \u0394 <= {h2}"
+    idx.append(x)
+    h1 = h2 # Finally let h1 jump one forward after the functional part of this iteration is complete, h2 will jump forward at the start of the next iteration
+
+cols = []
+it = iter(tte_bins)
+d1 = next(it)
+for _ in range(len(tte_bins)-1):
+    d2 = next(it)
+    x = f"{d1.days}<D<={d2.days}"
+    # x = f"{d1.days} < D <= {d2.days}"
+    cols.append(x)
+    d1 = d2 # Finally let d1 jump one forward after the functional part of this iteration is complete, d2 will jump forward at the start of the next iteration
+
+# print("\n", idx) ###
+# print(cols)
+
+base_buckets = pd.DataFrame(
+    base_buckets,
+    index = idx,
+    columns = cols
 )
 
-# (3) (To be used for heatmaps)
-bucket_mse = [] 
+print(base_buckets) ###
 
-for i in range(len(delta_bins)-1):
-    row = []
-    row_label = delta_label[i]
+assert base_buckets.values.sum() == spx_call_baseline_residuals_filtered.shape[0] * (spx_call_baseline_residuals_filtered.shape[1] + 1), "Total number of bucketed observations (DataFrame cells) do not match the actual number of cells"
 
-    for j in range(len(tte_bins)-1):
-        col_label = tte_label[j]
 
-        mask_arr = buckets[row_label][col_label]
-        mse = ((mask_arr * res_arr) ** 2).sum() / mask_arr.sum() if mask_arr.sum() > 0 else 0  # Avoids zero-division error (in this case we would not get an error, but rather NaN values, which should in fact be equal to 0 given that mse is calculated for a sample size = 0)
+##### TESTING:
 
-        row.append(mse)
-        
-    bucket_mse.append(row)
 
-bucket_mse = np.array(bucket_mse)
+### TEMPLATE:
+# delta_bins = np.linspace(0.05, 0.95, num=10)  # 10 boundaries → 9 bins
 
-# (4) The actual results from (1-3)
-# (4.1) the results to be exported to csv
-print(bucket_sse_per_call)
-# ... ADD: csv export-code 
-print(bucket_sse)
-print(bucket_mse)
+# df["delta_bucket"] = pd.cut(
+#     df["delta_bs"],
+#     bins=delta_bins,
+#     include_lowest=False,  # because interval is (0.05, 0.95)
+#     right=True
+# )
 
-# (4.2) heatmap of bucketed sse
-fig, ax = plt.subplots()
-im = ax.imshow(bucket_sse)
+# min_days = df["D_t"].min().days
+# max_days = df["D_t"].max().days
 
-# Show all ticks and label them with the respective list entries
-ax.set_xticks(range(len(tte_label)), labels=tte_label,
-              rotation=45, ha="right", rotation_mode="anchor")
-ax.set_yticks(range(len(delta_label)), labels=delta_label)
+# tte_bins = np.linspace(min_days, max_days, num=8)
+# tte_bins = np.round(tte_bins).astype(int)
+# tte_bins = pd.to_timedelta(tte_bins, unit="D")
 
-# Loop over data dimensions and create text annotations.
-for i in range(len(delta_label)):
-    for j in range(len(tte_label)):
-        text = ax.text(j, i, (bucket_sse / 1000).round(1)[i, j], # With SSE divided by 1000, and then rounded to 1 decimal, to ensure better readability of the heatmap
-                       ha="center", va="center", color="w")
+# df["maturity_bucket"] = pd.cut(
+#     df["D_t"],
+#     bins=tte_bins,
+#     include_lowest=True
+# )
 
-ax.set_title("Heatmap of the bucketed SSE (x1000)")
-fig.tight_layout()
-plt.show()
+# df["residual"] = df["dV"] - df["delta_bs"] * df["dS"]
+# df["squared_residual"] = df["residual"] ** 2
 
-# (4.3) heatmap of bucketed mse
-fig, ax = plt.subplots()
-im = ax.imshow(bucket_mse)
+# total_SSE = df["squared_residual"].sum()
+# total_MSE = df["squared_residual"].mean()
 
-# Show all ticks and label them with the respective list entries
-ax.set_xticks(range(len(tte_label)), labels=tte_label,
-              rotation=45, ha="right", rotation_mode="anchor")
-ax.set_yticks(range(len(delta_label)), labels=delta_label)
-
-# Loop over data dimensions and create text annotations.
-for i in range(len(delta_label)):
-    for j in range(len(tte_label)):
-        text = ax.text(j, i, bucket_mse.round(1)[i, j],  # With MSE rounded to 1 decimal, to ensure better readability of the heatmap
-                       ha="center", va="center", color="w")
-
-ax.set_title("Heatmap of the bucketed MSE")
-fig.tight_layout()
-plt.show()
+# base_bucket_results = (
+#     df.groupby(["delta_bucket", "maturity_bucket"])
+#       .agg(
+#           SSE=("squared_residual", "sum"),
+#           MSE=("squared_residual", "mean"),
+#           count=("squared_residual", "size")
+#       )
+#       .reset_index()
+# )
 
 
 ## (f) Hedging residuals and SSEs
