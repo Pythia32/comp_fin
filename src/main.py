@@ -500,6 +500,22 @@ spx_call_baseline_residuals_filtered = spx_call_baseline_residuals.loc[third_fil
 spx_call_baseline_sse = spx_call_baseline_residuals_filtered.pow(2).sum(axis=1)
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 ## (d) Standardized bucketing (mandatory)
 # Get hedge delta bins
 delta_bins = np.linspace(0.05, 0.95, num=10)  # 10 boundaries → 9 bins
@@ -539,15 +555,6 @@ for _ in range(len(tte_bins)-1):
 
 # Construct buckets
 buckets = {} 
-
-##########TESTTESTTEST
-# print(delta_df.shape)
-# print(tte_df.shape)
-# print("\n", spx_call_delta_ts.shape)
-# print(spx_call_baseline_hedge_delta.shape)
-# print(spx_close_delta_ts.shape)
-# print("\n", spx_call_baseline_residuals_filtered.shape)
-##########TESTTESTTEST
 
 for i in range(len(delta_bins)-1):
     h1 = delta_bins[i]
@@ -691,24 +698,46 @@ fig.tight_layout()
 # plt.show()
 
 
-###### Compute market-implied volatility + Use this to estimate BS-Delta
+
+
+
+
+
+########################################
+## Compute market-implied volatility + Use this to estimate BS-Delta
 ## "Since we assume the dividens q=0, we can use the following (simplified) method to compute the market-implied volatility, which then yields the estimated Black-Scholes Delta"
 # Function definitions below:
 def norm_cdf(x):
-    return 0.5 * (1 + math.erf(x / np.sqrt(2)))
+    return 0.5 * (1 + np.vectorize(math.erf)(x / np.sqrt(2)))
+
+# def norm_cdf(x):
+#     return 0.5 * (1 + math.erf(x / np.sqrt(2)))
 
 def norm_pdf(x):
     return np.exp(-0.5 * x**2) / np.sqrt(2*np.pi)
 
 def implied_volatility(price_mkt, S, K, tau, r,
-                       tol=1e-6, max_iter=100):
+                       tol=1e-6, max_iter=150):
 
     # No-arbitrage bounds (call option)
-    intrinsic = max(S - K * np.exp(-r * tau), 0)
+    intrinsic = S - K * np.exp(-r * tau)
+    intrinsic = intrinsic if intrinsic > 0 else 0.0
     upper_bound = S
 
-    if price_mkt < intrinsic or price_mkt > upper_bound:
+    # # No-arbitrage bounds (call option)
+    # intrinsic = max(S - K * np.exp(-r * tau), 0)
+    # upper_bound = S
+
+    eps = 1e-4
+
+    if price_mkt < intrinsic - eps:
+        price_mkt = intrinsic  # clamp
+
+    if price_mkt > upper_bound + eps:
         return np.nan, np.nan
+
+    # if price_mkt < intrinsic or price_mkt > upper_bound:
+    #     return np.nan, np.nan
 
     # Vol bounds
     sigma_low = 1e-6
@@ -736,6 +765,9 @@ def implied_volatility(price_mkt, S, K, tau, r,
         # If vega too small → switch to bisection
         if abs(vega) < 1e-8:
             break
+
+        # # Newton step
+        # sigma = sigma - diff / vega
 
         # Newton step
         sigma_new = sigma - diff / vega
@@ -826,6 +858,234 @@ estim_delta_bs.columns.name = "date"
 print(sigma_imp) ###
 print(estim_delta_bs) ###
 print(spx_call_baseline_hedge_delta.loc[third_filter.index]) #######
+print(cc_rates)
+
+
+
+
+
+
+
+
+
+
+
+########################################
+## Calculate residuals again, but now given the estimated deltas
+# DataFrames / ndarrays to be used
+delta_df = estim_delta_bs.drop(estim_delta_bs.columns[-1], axis=1) # So that #columns = 18, matching the other DataFrames
+res_df = spx_call_delta_ts.sub(delta_df.mul(spx_close_delta_ts, axis=1)) 
+
+delta_df = delta_df.loc[third_filter.index]
+res_df = res_df.loc[third_filter.index]
+tte_df = spx_call_days_to_exp.loc[third_filter.index]
+
+res_arr = res_df.to_numpy()
+
+print(delta_df) #####
+print(res_df)
+print(tte_df)
+print("#rows in res_df containing a NaN value", res_df.isna().any(axis=1).sum())
+print(tau)
+
+print("NaN sigma:", sigma_imp.isna().sum()) #####
+print("tau <= 0:", (tau <= 0).sum())
+print("sigma <= 0:", (sigma_imp <= 0).sum())
+print("S <= 0:", (S <= 0).sum())
+print("K <= 0:", (K <= 0).sum())
+
+test = pd.DataFrame(
+    price_mkt,
+    index = idx,
+    columns = cols
+)
+test = test[sigma_imp.isna()]
+print(test.describe()) #####
+
+# ## Calculate buckets, sse, mse, etc.. again but now for the estimated black-scholes deltas
+# ## (d) Standardized bucketing (mandatory)
+# # Get hedge delta bins
+# delta_bins = np.linspace(0.05, 0.95, num=10)  # 10 boundaries → 9 bins
+
+# # Get time-to-expiry bins
+# min_days = 14
+# max_days = spx_call_days_to_exp.max().max().days
+
+# tte_bins = np.linspace(min_days, max_days, num=8, dtype=int) # Time-to-expiry bins: 8 boundaries => 7 bins
+# tte_bins = pd.to_timedelta(tte_bins, unit="D")
+
+# # Define bucket labeling
+# delta_label = []
+# it = iter(delta_bins)
+# h1 = next(it)
+# for _ in range(len(delta_bins)-1):
+#     h2 = next(it)
+#     x = f"{round(h1, 2)} < \u0394 <= {round(h2, 2)}"
+#     delta_label.append(x)
+#     h1 = h2 
+
+# tte_label = []
+# it = iter(tte_bins)
+# d1 = next(it)
+# for _ in range(len(tte_bins)-1):
+#     d2 = next(it)
+#     x = f"{d1.days} < D <= {d2.days}"
+#     tte_label.append(x)
+#     d1 = d2
+
+# Construct buckets
+buckets = {} 
+
+for i in range(len(delta_bins)-1):
+    h1 = delta_bins[i]
+    h2 = delta_bins[i+1]
+    row = {}
+    row_label = delta_label[i]
+
+    for j in range(len(tte_bins)-1):
+        d1 = tte_bins[j]
+        d2 = tte_bins[j+1]
+
+        mask = (
+            (h1 < delta_df) & (delta_df <= h2) &
+            (d1 < tte_df) & (tte_df <= d2)
+        )
+        mask_arr = mask.to_numpy()
+        # print(mask_arr) #####
+
+        col_label = tte_label[j]
+        row[col_label] = mask_arr
+        
+    buckets[row_label] = row
+
+# Get global results (SSE/MSE) on the final filtered sample
+sse = res_df.pow(2).sum(axis=1)
+sse.rename("SSE", inplace=True)
+print(sse)
+
+mse = sse / res_df.shape[1]
+mse.rename("MSE", inplace=True)
+print(mse)
+
+# Get bucket results
+# (1) (To be used for heatmaps)
+bucket_sse = []
+
+for i in range(len(delta_bins)-1):
+    row = []
+    row_label = delta_label[i]
+
+    for j in range(len(tte_bins)-1):
+        col_label = tte_label[j]
+
+        mask_arr = buckets[row_label][col_label]
+        sse = ((mask_arr * res_arr) ** 2).sum()
+
+        row.append(sse)
+        
+    bucket_sse.append(row)
+
+bucket_sse = np.array(bucket_sse)
+
+# (2)
+bucket_sse_per_call = []
+
+for i in range(len(delta_bins)-1):
+    row = []
+    row_label = delta_label[i]
+
+    for j in range(len(tte_bins)-1):
+        col_label = tte_label[j]
+
+        mask_arr = buckets[row_label][col_label]
+        sse = ((mask_arr * res_arr) ** 2).sum(axis=1)
+        sse = pd.Series(
+            sse, 
+            index = res_df.index
+        )
+
+        row.append(sse)
+        
+    bucket_sse_per_call.append(row)
+
+bucket_sse_per_call = pd.DataFrame(
+    bucket_sse_per_call,
+    index = delta_label,
+    columns = tte_label,
+)
+
+# (3) (To be used for heatmaps)
+bucket_mse = [] 
+
+for i in range(len(delta_bins)-1):
+    row = []
+    row_label = delta_label[i]
+
+    for j in range(len(tte_bins)-1):
+        col_label = tte_label[j]
+
+        mask_arr = buckets[row_label][col_label]
+        mse = ((mask_arr * res_arr) ** 2).sum() / mask_arr.sum() if mask_arr.sum() > 0 else 0  # Avoids zero-division error (in this case we would not get an error, but rather NaN values, which should in fact be equal to 0 given that mse is calculated for a sample size = 0)
+
+        row.append(mse)
+        
+    bucket_mse.append(row)
+
+bucket_mse = np.array(bucket_mse)
+
+# (4) The actual results from (1-3)
+# (4.1) the results to be exported to csv
+print(bucket_sse_per_call)
+# ... ADD: csv export-code 
+print(bucket_sse)
+print(bucket_mse)
+
+# (4.2) heatmap of bucketed sse
+fig, ax = plt.subplots()
+im = ax.imshow(bucket_sse)
+
+# Show all ticks and label them with the respective list entries
+ax.set_xticks(range(len(tte_label)), labels=tte_label,
+              rotation=45, ha="right", rotation_mode="anchor")
+ax.set_yticks(range(len(delta_label)), labels=delta_label)
+
+# Loop over data dimensions and create text annotations.
+for i in range(len(delta_label)):
+    for j in range(len(tte_label)):
+        text = ax.text(j, i, (bucket_sse / 1000).round(1)[i, j], # With SSE divided by 1000, and then rounded to 1 decimal, to ensure better readability of the heatmap
+                       ha="center", va="center", color="w")
+
+ax.set_title("Heatmap of the bucketed SSE (x1000)")
+fig.tight_layout()
+plt.show()
+
+# (4.3) heatmap of bucketed mse
+fig, ax = plt.subplots()
+im = ax.imshow(bucket_mse)
+
+# Show all ticks and label them with the respective list entries
+ax.set_xticks(range(len(tte_label)), labels=tte_label,
+              rotation=45, ha="right", rotation_mode="anchor")
+ax.set_yticks(range(len(delta_label)), labels=delta_label)
+
+# Loop over data dimensions and create text annotations.
+for i in range(len(delta_label)):
+    for j in range(len(tte_label)):
+        text = ax.text(j, i, bucket_mse.round(1)[i, j],  # With MSE rounded to 1 decimal, to ensure better readability of the heatmap
+                       ha="center", va="center", color="w")
+
+ax.set_title("Heatmap of the bucketed MSE")
+fig.tight_layout()
+plt.show()
+
+
+
+
+
+
+
+
+
 
 
 ## (f) Hedging residuals and SSEs
