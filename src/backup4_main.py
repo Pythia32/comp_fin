@@ -669,7 +669,7 @@ for i in range(len(delta_label)):
 
 ax.set_title("Heatmap of the bucketed SSE (x1000)")
 fig.tight_layout()
-# plt.show()
+plt.show()
 
 # (4.3) heatmap of bucketed mse
 fig, ax = plt.subplots()
@@ -688,144 +688,7 @@ for i in range(len(delta_label)):
 
 ax.set_title("Heatmap of the bucketed MSE")
 fig.tight_layout()
-# plt.show()
-
-
-###### Compute market-implied volatility + Use this to estimate BS-Delta
-## "Since we assume the dividens q=0, we can use the following (simplified) method to compute the market-implied volatility, which then yields the estimated Black-Scholes Delta"
-# Function definitions below:
-def norm_cdf(x):
-    return 0.5 * (1 + math.erf(x / np.sqrt(2)))
-
-def norm_pdf(x):
-    return np.exp(-0.5 * x**2) / np.sqrt(2*np.pi)
-
-def implied_volatility(price_mkt, S, K, tau, r,
-                       tol=1e-6, max_iter=100):
-
-    # No-arbitrage bounds (call option)
-    intrinsic = max(S - K * np.exp(-r * tau), 0)
-    upper_bound = S
-
-    if price_mkt < intrinsic or price_mkt > upper_bound:
-        return np.nan, np.nan
-
-    # Vol bounds
-    sigma_low = 1e-6
-    sigma_high = 5.0   # 500% vol cap (very safe upper limit)
-
-    # Initial guess
-    F = S * np.exp(r * tau)
-    sigma = np.sqrt(2 * np.pi / tau) * (price_mkt / F)
-    sigma = np.clip(sigma, sigma_low, sigma_high)
-
-    for _ in range(max_iter):
-
-        sigma_sqrt_tau = sigma * np.sqrt(tau)
-        d1 = (np.log(S / K) + (r + 0.5 * sigma**2) * tau) / sigma_sqrt_tau
-        d2 = d1 - sigma_sqrt_tau
-
-        price_bs = S * norm_cdf(d1) - K * np.exp(-r * tau) * norm_cdf(d2)
-        vega = S * norm_pdf(d1) * np.sqrt(tau)
-
-        diff = price_bs - price_mkt
-
-        if abs(diff) < tol:
-            return sigma, norm_cdf(d1)
-
-        # If vega too small → switch to bisection
-        if abs(vega) < 1e-8:
-            break
-
-        # Newton step
-        sigma_new = sigma - diff / vega
-
-        # Keep sigma in bounds
-        if sigma_new <= sigma_low or sigma_new >= sigma_high:
-            break
-
-        sigma = sigma_new
-
-    # Bisection fallback
-    for _ in range(max_iter):
-
-        sigma_mid = 0.5 * (sigma_low + sigma_high)
-
-        sigma_sqrt_tau = sigma_mid * np.sqrt(tau)
-        d1 = (np.log(S / K) + (r + 0.5 * sigma_mid**2) * tau) / sigma_sqrt_tau
-        d2 = d1 - sigma_sqrt_tau
-
-        price_bs = S * norm_cdf(d1) - K * np.exp(-r * tau) * norm_cdf(d2)
-
-        if abs(price_bs - price_mkt) < tol:
-            return sigma_mid, norm_cdf(d1)
-
-        if price_bs > price_mkt:
-            sigma_high = sigma_mid
-        else:
-            sigma_low = sigma_mid
-
-    print("Warning: Max iterations reached without convergence.")
-    return np.nan, np.nan
-
-
-# Collect necessary data/ parameters
-price_mkt = Augmented_SPX_call_midquote_series.iloc[:-1, :].copy()
-tau = SPX_call_tau_series.copy()
-r = cc_rates.copy()
-idx, *_ = zip(*price_mkt.index)
-
-price_mkt.index = idx
-tau.index = idx
-r.index = idx
-
-price_mkt = price_mkt.loc[third_filter.index]
-idx = price_mkt.index.tolist()
-cols = price_mkt.columns.tolist()
-
-price_mkt = price_mkt.to_numpy()
-S = SPX_close_series.values
-K = spx_call_info.loc[third_filter.index]["strike"].values
-tau = tau.loc[third_filter.index].to_numpy()
-r = r.loc[third_filter.index].to_numpy()
-
-
-# Compute all the market-implied volatilities + Black-Scholes Deltas
-sigma_imp = np.zeros((len(idx), len(cols)))
-estim_delta_bs = np.zeros((len(idx), len(cols)))
-for i, _ in enumerate(idx):
-
-    for j, _ in enumerate(cols):
-        sigma, delta  = implied_volatility(
-            price_mkt[i, j], 
-            S[j], 
-            K[i], 
-            tau[i, j], 
-            r[i, j]
-        )
-        sigma_imp[i, j] = sigma
-        estim_delta_bs[i, j] = delta
-
-
-sigma_imp = pd.DataFrame(
-    sigma_imp,
-    index = idx,
-    columns = cols
-)
-sigma_imp.index.name = "symbol"
-sigma_imp.columns.name = "date"
-
-estim_delta_bs = pd.DataFrame(
-    estim_delta_bs,
-    index = idx,
-    columns = cols
-)
-estim_delta_bs.index.name = "symbol"
-estim_delta_bs.columns.name = "date"
-
-print(sigma_imp) ###
-print(estim_delta_bs) ###
-print(spx_call_baseline_hedge_delta.loc[third_filter.index]) #######
+plt.show()
 
 
 ## (f) Hedging residuals and SSEs

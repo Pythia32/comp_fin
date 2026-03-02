@@ -691,7 +691,9 @@ fig.tight_layout()
 # plt.show()
 
 
+
 ###### Compute market-implied volatility + Use this to estimate BS-Delta
+#################################### ATTEMPT 1
 ## "Since we assume the dividens q=0, we can use the following (simplified) method to compute the market-implied volatility, which then yields the estimated Black-Scholes Delta"
 # Function definitions below:
 def norm_cdf(x):
@@ -700,6 +702,7 @@ def norm_cdf(x):
 def norm_pdf(x):
     return np.exp(-0.5 * x**2) / np.sqrt(2*np.pi)
 
+###### VERSION 2:
 def implied_volatility(price_mkt, S, K, tau, r,
                        tol=1e-6, max_iter=100):
 
@@ -767,6 +770,56 @@ def implied_volatility(price_mkt, S, K, tau, r,
 
     print("Warning: Max iterations reached without convergence.")
     return np.nan, np.nan
+
+
+###### VERSION 1:
+# def implied_volatility(price_mkt, S, K, tau, r, tol=1e-6, max_iter=100):
+#     """
+#     Calculate Implied Volatility using Newton-Raphson.
+#     Parameters:
+#     price_mkt : float - Observed market price of the option
+#     S : float - Asset spot price (at time t)
+#     K : float - Strike Price
+#     tau : float - Year fraction ((T-t)/365)
+#     r : float - Risk-free rate
+#     Returns:
+#     sigma_imp : float - Implied Volatility
+#     delta_bs : float - Estimated Black-Scholes Delta
+#     """
+#     # 1. Initial Guess (Brenner-Subrahmanyam approximation)
+#     # This places us close to the solution for ATM options
+#     F = S * np.exp(r * tau)
+#     sigma = np.sqrt(2 * np.pi / tau) * (price_mkt / F)
+
+#     for i in range(max_iter):
+#         # Calculate d1, d2
+#         sigma_sqrt_tau = sigma * np.sqrt(tau)
+#         d1 = (np.log(S / K) + (r + 0.5 * sigma**2) * tau) / sigma_sqrt_tau
+#         d2 = d1 - sigma_sqrt_tau
+
+#         # Calculate Price and Vega
+#         # Note: We use r=0 formulas here based on lecture assumptions,
+#         # but generic implementation would include discount factors.
+#         price_bs = S * norm_cdf(d1) - K * np.exp(-r * tau) * norm_cdf(d2)
+#         vega = S * norm_pdf(d1) * np.sqrt(tau)
+
+#         # Calculate Error
+#         diff = price_bs - price_mkt
+
+#         # Check Convergence
+#         if abs(diff) < tol:
+#             return sigma, norm_cdf(d1) ###
+        
+#         # Newton-Raphson Step
+#         # Protection against Zero Vega (Deep OTM/ITM)
+#         if abs(vega) < 1e-8:
+#             print(f"Warning: Vega is zero, Newton method fails at iteration: {i}.")
+#             return np.nan, np.nan ###
+        
+#         sigma = sigma - diff / vega
+
+#     print("Warning: Max iterations reached without convergence.")
+#     return sigma, norm_cdf(d1) ###
 
 
 # Collect necessary data/ parameters

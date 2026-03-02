@@ -669,7 +669,7 @@ for i in range(len(delta_label)):
 
 ax.set_title("Heatmap of the bucketed SSE (x1000)")
 fig.tight_layout()
-# plt.show()
+plt.show()
 
 # (4.3) heatmap of bucketed mse
 fig, ax = plt.subplots()
@@ -688,144 +688,225 @@ for i in range(len(delta_label)):
 
 ax.set_title("Heatmap of the bucketed MSE")
 fig.tight_layout()
-# plt.show()
+plt.show()
+
 
 
 ###### Compute market-implied volatility + Use this to estimate BS-Delta
+#################################### ATTEMPT 1
 ## "Since we assume the dividens q=0, we can use the following (simplified) method to compute the market-implied volatility, which then yields the estimated Black-Scholes Delta"
 # Function definitions below:
 def norm_cdf(x):
-    return 0.5 * (1 + math.erf(x / np.sqrt(2)))
+    return 0.5 * (1 + np.erf(x / np.sqrt(2)))
 
 def norm_pdf(x):
     return np.exp(-0.5 * x**2) / np.sqrt(2*np.pi)
 
-def implied_volatility(price_mkt, S, K, tau, r,
-                       tol=1e-6, max_iter=100):
-
-    # No-arbitrage bounds (call option)
-    intrinsic = max(S - K * np.exp(-r * tau), 0)
-    upper_bound = S
-
-    if price_mkt < intrinsic or price_mkt > upper_bound:
-        return np.nan, np.nan
-
-    # Vol bounds
-    sigma_low = 1e-6
-    sigma_high = 5.0   # 500% vol cap (very safe upper limit)
-
-    # Initial guess
+def implied_volatility(price_mkt, S, K, tau, r, tol=1e-6, max_iter=100):
+    """
+    Calculate Implied Volatility using Newton-Raphson.
+    Parameters:
+    price_mkt : float - Observed market price of the option
+    S : float - Asset spot price (at time t)
+    K : float - Strike Price
+    tau : float - Year fraction ((T-t)/365)
+    r : float - Risk-free rate
+    Returns:
+    sigma_imp : float - Implied Volatility
+    delta_bs : float - Estimated Black-Scholes Delta
+    """
+    # 1. Initial Guess (Brenner-Subrahmanyam approximation)
+    # This places us close to the solution for ATM options
     F = S * np.exp(r * tau)
     sigma = np.sqrt(2 * np.pi / tau) * (price_mkt / F)
-    sigma = np.clip(sigma, sigma_low, sigma_high)
 
-    for _ in range(max_iter):
-
+    for i in range(max_iter):
+        # Calculate d1, d2
         sigma_sqrt_tau = sigma * np.sqrt(tau)
         d1 = (np.log(S / K) + (r + 0.5 * sigma**2) * tau) / sigma_sqrt_tau
         d2 = d1 - sigma_sqrt_tau
 
+        # Calculate Price and Vega
+        # Note: We use r=0 formulas here based on lecture assumptions,
+        # but generic implementation would include discount factors.
         price_bs = S * norm_cdf(d1) - K * np.exp(-r * tau) * norm_cdf(d2)
         vega = S * norm_pdf(d1) * np.sqrt(tau)
 
+        # Calculate Error
         diff = price_bs - price_mkt
 
+        # Check Convergence
         if abs(diff) < tol:
-            return sigma, norm_cdf(d1)
-
-        # If vega too small → switch to bisection
+            return sigma, norm_cdf(d1) ###
+        
+        # Newton-Raphson Step
+        # Protection against Zero Vega (Deep OTM/ITM)
         if abs(vega) < 1e-8:
-            break
-
-        # Newton step
-        sigma_new = sigma - diff / vega
-
-        # Keep sigma in bounds
-        if sigma_new <= sigma_low or sigma_new >= sigma_high:
-            break
-
-        sigma = sigma_new
-
-    # Bisection fallback
-    for _ in range(max_iter):
-
-        sigma_mid = 0.5 * (sigma_low + sigma_high)
-
-        sigma_sqrt_tau = sigma_mid * np.sqrt(tau)
-        d1 = (np.log(S / K) + (r + 0.5 * sigma_mid**2) * tau) / sigma_sqrt_tau
-        d2 = d1 - sigma_sqrt_tau
-
-        price_bs = S * norm_cdf(d1) - K * np.exp(-r * tau) * norm_cdf(d2)
-
-        if abs(price_bs - price_mkt) < tol:
-            return sigma_mid, norm_cdf(d1)
-
-        if price_bs > price_mkt:
-            sigma_high = sigma_mid
-        else:
-            sigma_low = sigma_mid
+            print("Warning: Vega is zero, Newton method fails.")
+            return np.nan, np.nan ###
+        
+        sigma = sigma - diff / vega
 
     print("Warning: Max iterations reached without convergence.")
-    return np.nan, np.nan
+    return sigma, norm_cdf(d1) ###
+
+
+# def bs_call_delta(S, K, tau, r, sigma):
+#     d1 = (np.log(S / K) + (r + 0.5 * sigma**2) * tau) / (sigma * np.sqrt(tau))
+#     return norm_cdf(d1)
 
 
 # Collect necessary data/ parameters
 price_mkt = Augmented_SPX_call_midquote_series.iloc[:-1, :].copy()
-tau = SPX_call_tau_series.copy()
-r = cc_rates.copy()
+price_mkt.columns.name = None
 idx, *_ = zip(*price_mkt.index)
 
 price_mkt.index = idx
-tau.index = idx
-r.index = idx
+price_mkt.index.name = "symbol"
+price_mkt.columns.name = "date"
+
+# spx_call_delta_ts = Augmented_SPX_call_delta_series.iloc[:-1, :].copy()
+# spx_call_delta_ts.columns.name = None
+# spx_call_info = pd.DataFrame()
+
+# idx, spx_call_info["strike"], spx_call_info["expiry"] = zip(*spx_call_delta_ts.index)
+
+# spx_call_delta_ts.index = idx
+# spx_call_delta_ts.index.name = "symbol"
+# spx_call_delta_ts.columns.name = "date"
+
 
 price_mkt = price_mkt.loc[third_filter.index]
-idx = price_mkt.index.tolist()
-cols = price_mkt.columns.tolist()
-
-price_mkt = price_mkt.to_numpy()
 S = SPX_close_series.values
 K = spx_call_info.loc[third_filter.index]["strike"].values
-tau = tau.loc[third_filter.index].to_numpy()
-r = r.loc[third_filter.index].to_numpy()
+tau = SPX_call_tau_series.loc[third_filter.index]
+r = cc_rates.loc[third_filter.index]
+
+# price_mkt = price_mkt.loc[third_filter.index].to_numpy()
+# S = SPX_close_series.values
+# K = spx_call_info.loc[third_filter.index]["strike"].values
+# tau = SPX_call_tau_series.loc[third_filter.index].to_numpy()
+# r = cc_rates.loc[third_filter.index].to_numpy()
+
+# price_mkt = price_mkt.loc[third_filter.index]
+# S = SPX_close_series
+# K = spx_call_info.loc[third_filter.index]["strike"]
+# tau = SPX_call_tau_series.loc[third_filter.index]
+# r = cc_rates.loc[third_filter.index]
 
 
 # Compute all the market-implied volatilities + Black-Scholes Deltas
-sigma_imp = np.zeros((len(idx), len(cols)))
-estim_delta_bs = np.zeros((len(idx), len(cols)))
-for i, _ in enumerate(idx):
+sigma_imp = []
+estim_delta_bs = []
+for i, _ in enumerate(price_mkt.index.tolist()):
+    row_s = []
+    row_d = []
 
-    for j, _ in enumerate(cols):
+    for j, _ in enumerate(price_mkt.columns.tolist()):
         sigma, delta  = implied_volatility(
-            price_mkt[i, j], 
+            price_mkt.iloc[i, j], 
             S[j], 
             K[i], 
-            tau[i, j], 
-            r[i, j]
+            tau.iloc[i, j], 
+            r.iloc[i, j]
         )
-        sigma_imp[i, j] = sigma
-        estim_delta_bs[i, j] = delta
+        row_s.append(sigma)
+        row_d.append(delta)
+    
+    sigma_imp.append(row_s)
+    estim_delta_bs.append(row_d)
 
 
-sigma_imp = pd.DataFrame(
-    sigma_imp,
-    index = idx,
-    columns = cols
-)
-sigma_imp.index.name = "symbol"
-sigma_imp.columns.name = "date"
 
-estim_delta_bs = pd.DataFrame(
-    estim_delta_bs,
-    index = idx,
-    columns = cols
-)
-estim_delta_bs.index.name = "symbol"
-estim_delta_bs.columns.name = "date"
 
-print(sigma_imp) ###
-print(estim_delta_bs) ###
-print(spx_call_baseline_hedge_delta.loc[third_filter.index]) #######
+
+
+
+
+
+
+
+#################################### ATTEMPT 1
+# def norm_cdf(x):
+#     return 0.5 * (1 + np.erf(x / np.sqrt(2)))
+
+# def norm_pdf(x):
+#     return np.exp(-0.5 * x**2) / np.sqrt(2*np.pi)
+
+# def bs_call_delta(S, K, r, q, T, sigma):
+#     d1 = (np.log(S / K) + (r - q + 0.5 * sigma**2) * T) / (sigma * np.sqrt(T))
+#     return np.exp(-q * T) * norm_cdf(d1)
+
+# def implied_volatility(price_mkt, F, K, T, r=0, tol=1e-6, max_iter=100):
+#     """
+#     Calculate Implied Volatility using Newton-Raphson.
+#     Parameters:
+#     price_mkt : float - Observed market price of the option
+#     F : float - Forward Price
+#     K : float - Strike Price
+#     T : float - Time to maturity
+#     r : float - Risk-free rate (default 0)
+#     Returns:
+#     sigma_imp : float - Implied Volatility
+#     """
+#     # 1. Initial Guess (Brenner-Subrahmanyam approximation)
+#     # This places us close to the solution for ATM options
+#     sigma = np.sqrt(2 * np.pi / T) * (price_mkt / F)
+
+#     for i in range(max_iter):
+#         # Calculate d1, d2
+#         sigma_sqrt_T = sigma * np.sqrt(T)
+#         d1 = (np.log(F / K) + 0.5 * sigma**2 * T) / sigma_sqrt_T
+#         d2 = d1 - sigma_sqrt_T
+
+#         # Calculate Price and Vega
+#         # Note: We use r=0 formulas here based on lecture assumptions,
+#         # but generic implementation would include discount factors.
+#         price_model = F * norm_cdf(d1) - K * norm_cdf(d2)
+#         vega = F * norm_pdf(d1) * np.sqrt(T)
+
+#         # Calculate Error
+#         diff = price_mkt - price_model
+
+#         # Check Convergence
+#         if abs(diff) < tol:
+#             return sigma
+        
+#         # Newton-Raphson Step
+#         # Protection against Zero Vega (Deep OTM/ITM)
+#         if abs(vega) < 1e-8:
+#             print("Warning: Vega is zero, Newton method fails.")
+#             return np.nan
+        
+#         sigma = sigma + diff / vega
+
+#     print("Warning: Max iterations reached without convergence.")
+#     return sigma
+
+# Example Usage
+# F = 100
+# K = 100
+# T = 1.0
+# market_price = 7.96 # Assume this is the observed price
+# iv = implied_volatility(market_price, F, K, T)
+# print(f"Market Price: {market_price}")
+# print(f"Implied Vol: {iv:.4f} (Expected ~20%)")
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 ## (f) Hedging residuals and SSEs
